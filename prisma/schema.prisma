@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  date        DateTime
+  description String
+  amount      Float
+  createdAt   DateTime @default(now())
+
+  category    String?   // nullable until classified
+  status      String    @default("pending") // "pending" or "confirmed"
+}
+
+
+model MerchantCategory {
+  id              Int    @id @default(autoincrement())
+  merchantPattern String @unique  // e.g. "STARBUCKS", or a regex-safe string
+  category        String           // e.g. "Wants:Coffee"
+}
+
+model Settings {
+  id          String   @id @default(uuid())
+  hourlyRate  Float
+  hoursPP1    Int      // 1st–15th
+  hoursPP2    Int      // 16th–end
+  month       String   // YYYY‑MM
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Category {
+  id    String      @id @default(uuid())
+  macro String      // e.g. “Needs”
+  micro String      @unique() // e.g. “Housing/Rent”
+  items BudgetItem[]
+}
+
+model BudgetItem {
+  id         String   @id @default(uuid())
+  name       String
+  amount     Float
+  category   Category @relation(fields: [categoryId], references: [id])
+  categoryId String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([name, categoryId])
+}
