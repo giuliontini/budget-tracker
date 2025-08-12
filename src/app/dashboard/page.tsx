@@ -185,7 +185,7 @@ export default function DashboardPage() {
   )
 
   return (
-    <div className="p-6 space-y-8">
+    <div className="px-4 sm:px-6 lg:px-8 py-6 space-y-8 mx-auto w-full max-w-screen-xl">
       <Navbar title="Dashboard" />
 
       {/* Month Navigation */}
@@ -217,55 +217,92 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Expense Distribution */}
       <section>
         <h2 className="text-xl font-semibold mb-4">Expense Distribution</h2>
-        <Doughnut data={donutData} />
+        <div className="relative w-full h-[220px] sm:h-[260px] md:h-[320px] lg:h-[360px]">
+          <Doughnut
+            data={donutData}
+            options={{
+              responsive: true,
+              maintainAspectRatio: false, // parent controls height
+              plugins: {
+                legend: { position: 'bottom', labels: { boxWidth: 12 } },
+                tooltip: { intersect: false }
+              },
+              cutout: '60%', // you can bump to '70%' on lg+ if you like
+            }}
+          />
+        </div>
       </section>
 
-      {/* Spending Trends */}
       <section>
         <h2 className="text-xl font-semibold mb-4">Spending Trends (6mo)</h2>
-        <Line data={lineData} />
+        <div className="relative w-full h-[240px] sm:h-[300px] md:h-[360px]">
+          <Line
+            data={lineData}
+            options={{ responsive: true, maintainAspectRatio: false }}
+          />
+        </div>
       </section>
 
-      {/* Spending vs Budget */}
       <section>
         <h2 className="text-xl font-semibold mb-4">Spending vs. Budget</h2>
-        <Bar data={barData} />
+        <div className="relative w-full h-[240px] sm:h-[300px] md:h-[360px]">
+          <Bar
+            data={barData}
+            options={{ responsive: true, maintainAspectRatio: false }}
+          />
+        </div>
       </section>
 
-      {/* Transaction Table */}
       <section>
         <h2 className="text-xl font-semibold mb-4">All Transactions</h2>
         <input
           placeholder="Search descriptions..."
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          className="border rounded px-3 py-1 mb-4"
+          className="border rounded px-3 py-2 mb-4 w-full sm:w-80
+                    bg-white text-gray-900 dark:bg-zinc-900 dark:text-gray-100"
         />
-        <table className="w-full table-auto border-collapse">
-          <thead>
-            <tr>
-              {['Date', 'Description', 'Category', 'Amount', 'Notes'].map((h) => (
-                <th key={h} className="border text-black px-2 py-1 text-left bg-gray-100">
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filteredTx.map((tx) => (
-              <tr key={tx.id} className="hover:bg-gray-50 hover:text-black">
-                <td className="border px-2 py-1">{tx.date.slice(0, 10)}</td>
-                <td className="border px-2 py-1">{tx.description}</td>
-                <td className="border px-2 py-1">{tx.category}</td>
-                <td className="border px-2 py-1">${tx.amount.toFixed(2)}</td>
-                <td className="border px-2 py-1"></td>
+
+        <div
+          className="rounded-2xl border shadow-sm overflow-x-auto
+                    bg-white text-gray-900 border-zinc-200
+                    dark:bg-zinc-900 dark:text-gray-100 dark:border-zinc-800"
+        >
+          <table className="min-w-[720px] w-full table-auto border-collapse text-sm">
+            <thead>
+              <tr>
+                {['Date', 'Description', 'Category', 'Amount', 'Notes'].map((h) => (
+                  <th
+                    key={h}
+                    className={[
+                      'border px-3 py-2 text-left',
+                      'bg-gray-100 text-gray-900 border-zinc-200',
+                      'dark:bg-zinc-800 dark:text-gray-100 dark:border-zinc-800',
+                      h === 'Notes' ? 'hidden sm:table-cell' : '',
+                    ].join(' ')}
+                  >
+                    {h}
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filteredTx.map((tx) => (
+                <tr key={tx.id} className="hover:bg-white-50 hover:text-black-900 dark:hover:bg-zinc-800">
+                  <td className="border px-3 py-2 whitespace-nowrap border-zinc-200 dark:border-zinc-800">
+                    {tx.date.slice(0, 10)}
+                  </td>
+                  <td className="border px-3 py-2 border-zinc-200 dark:border-zinc-800">{tx.description}</td>
+                  <td className="border px-3 py-2 border-zinc-200 dark:border-zinc-800">{tx.category}</td>
+                  <td className="border px-3 py-2 border-zinc-200 dark:border-zinc-800">${tx.amount.toFixed(2)}</td>
+                  <td className="border px-3 py-2 hidden sm:table-cell border-zinc-200 dark:border-zinc-800"></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   )

@@ -32,7 +32,7 @@ export default function PendingTransactionsPage() {
     const raw = selected[tx.id] || ''
     const [, micro] = raw.split(':')       // drop the “Needs” part
     const addToLookupFlag = addLookup[tx.id] ?? false
-  
+
     await fetch(`/api/transactions/${tx.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -41,9 +41,9 @@ export default function PendingTransactionsPage() {
         addToLookup: addToLookupFlag,
       }),
     })
-  
+
     setTxs((prev) => prev.filter((t) => t.id !== tx.id))
-  }  
+  }
 
   return (
     <div className="p-6 space-y-8">
@@ -53,31 +53,32 @@ export default function PendingTransactionsPage() {
       </h1>
 
       {txs.length === 0 && <p>No pending transactions 🎉</p>}
-
       {txs.map((tx) => (
         <div
           key={tx.id}
-          className="border rounded p-4 mb-4 shadow-sm"
+          className="border rounded-2xl p-3 sm:p-4 md:p-6 mb-4 shadow-sm overflow-hidden
+                   bg-white text-gray-900 border-zinc-200
+                   dark:bg-zinc-900 dark:text-gray-100 dark:border-zinc-800"
         >
-          <div className="flex justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
             <div>
               <p className="font-medium">{tx.description}</p>
-              <p className="text-sm text-gray-500">
-                {new Date(tx.date).toLocaleString()} — $
-                {tx.amount.toFixed(2)}
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {new Date(tx.date).toLocaleString()} — ${tx.amount.toFixed(2)}
               </p>
             </div>
           </div>
 
-          <div className="mt-3 flex items-center space-x-4">
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
             <select
-            value={selected[tx.id] || ''}
-            onChange={(e) =>
-                setSelected((s) => ({ ...s, [tx.id]: e.target.value }))
-            }
+              className="border rounded px-3 py-2 w-full sm:w-72
+                       bg-white text-gray-900 border-zinc-200
+                       dark:bg-zinc-800 dark:text-gray-100 dark:border-zinc-700"
+              value={selected[tx.id] || ''}
+              onChange={(e) => setSelected((s) => ({ ...s, [tx.id]: e.target.value }))}
             >
-            <option value="">– select sub-category –</option>
-            {['Needs', 'Wants', 'Savings'].map((macro) => (
+              <option value="">– select sub-category –</option>
+              {['Needs', 'Wants', 'Savings'].map((macro) => (
                 <optgroup key={macro} label={macro}>
                 {microCategories
                     .filter((µ) => microToMacro[µ] === macro)
@@ -90,26 +91,20 @@ export default function PendingTransactionsPage() {
             ))}
             </select>
 
-            <label className="inline-flex items-center">
+            <label className="inline-flex items-center text-sm">
               <input
                 type="checkbox"
-                className="mr-1"
+                className="mr-2 accent-blue-600"
                 checked={addLookup[tx.id] || false}
-                onChange={(e) =>
-                  setAddLookup((l) => ({
-                    ...l,
-                    [tx.id]: e.target.checked,
-                  }))
-                }
+                onChange={(e) => setAddLookup((l) => ({ ...l, [tx.id]: e.target.checked }))}
               />
-              Add to lookup
+              <span className="text-gray-700 dark:text-gray-300">Add to lookup</span>
             </label>
 
             <button
-              className="ml-auto bg-blue-600 text-white px-4 py-1 rounded disabled:opacity-50"
+              className="sm:ml-auto bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50 w-full sm:w-auto"
               disabled={!selected[tx.id]}
-              onClick={() => handleSave(tx)}
-            >
+              onClick={() => handleSave(tx)}>
               Save
             </button>
           </div>
