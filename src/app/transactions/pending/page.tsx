@@ -4,7 +4,9 @@
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/Navbar'
 import { microCategories, microToMacro } from '@/utils/categories'
+import ConfirmDialog from '@/components/ConfirmDialog';
 
+const [toDelete, setToDelete] = useState<Tx | null>(null);
 
 type Tx = {
   id: number
@@ -44,7 +46,7 @@ export default function PendingTransactionsPage() {
 
     setTxs((prev) => prev.filter((t) => t.id !== tx.id))
   }
-
+  
   return (
     <div className="p-6 space-y-8">
       <Navbar title="Pending" />
@@ -103,21 +105,12 @@ export default function PendingTransactionsPage() {
 
             <button
               className="text-red-600 hover:underline text-sm"
-              onClick={async () => {
-                // optimistic remove
-                setTxs((prev) => prev.filter((t) => t.id !== tx.id));
-                try {
-                  const res = await fetch(`/api/transactions/${tx.id}`, { method: "DELETE" });
-                  if (!res.ok) throw new Error("Failed");
-                } catch {
-                  // if it fails, bring it back
-                  setTxs((prev) => [tx, ...prev]);
-                  alert("Delete failed");
-                }
-              }}
+              onClick={() => setToDelete(tx)}
+              type="button"
             >
               Delete
             </button>
+
 
             <button
               className="sm:ml-auto bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50 w-full sm:w-auto"
@@ -128,6 +121,35 @@ export default function PendingTransactionsPage() {
           </div>
         </div>
       ))}
+
+      <ConfirmDialog
+        open={!!toDelete}
+        title="Delete transaction?"
+        message={
+          <span>
+            Delete <strong>{toDelete?.description}</strong> for ${toDelete?.amount.toFixed(2)}?
+            <br />This cannot be undone.
+          </span>
+        }
+        confirmText="Delete"
+        cancelText="Cancel"
+        onCancel={() => setToDelete(null)}
+        onConfirm={async () => {
+          if (!toDelete) return;
+          const tx = toDelete;
+          setToDelete(null);
+
+          // optimistic remove
+          setTxs((prev) => prev.filter((t) => t.id !== tx.id));
+          try {
+            const res = await fetch(`/api/transactions/${tx.id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Failed');
+          } catch {
+            setTxs((prev) => [tx, ...prev]);
+            alert('Delete failed');
+          }
+        }}
+      />
     </div>
   )
 }

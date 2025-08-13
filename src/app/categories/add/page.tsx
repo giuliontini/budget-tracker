@@ -7,6 +7,9 @@ import { useForm } from 'react-hook-form'
 import Navbar from '@/components/Navbar'
 import { macroCategories, microCategories, microToMacro } from '@/utils/categories'
 import type { MacroCategory, MicroCategory } from '@/utils/categories'
+import ConfirmDialog from '@/components/ConfirmDialog';
+
+const [toDelete, setToDelete] = useState<BudgetItem | null>(null);
 
 type BudgetItem = {
   id: string
@@ -70,6 +73,21 @@ export default function AddBudgetItemPage() {
       setItems(await refreshed.json())
     } catch (err) {
       console.error('Submit error:', err)
+    }
+  }
+
+  const handleDelete = async (item: BudgetItem) => {
+    const ok = window.confirm(`Delete "${item.name}"? This action cannot be undone.`);
+    if (!ok) return;
+    // optimistic update
+    setItems((prev) => prev.filter((x) => x.id !== item.id));
+    try {
+      const res = await fetch(`/api/budget-items/${item.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed");
+    } catch {
+      // revert if it fails
+      setItems((prev) => [...prev, item].sort((a,b)=>a.name.localeCompare(b.name)));
+      alert("Delete failed");
     }
   }
 
@@ -174,18 +192,8 @@ export default function AddBudgetItemPage() {
                   <div className="mt-2">
                     <button
                       className="text-red-600 hover:underline text-sm"
-                      onClick={async () => {
-                        // optimistic update
-                        setItems((prev) => prev.filter((x) => x.id !== item.id));
-                        try {
-                          const res = await fetch(`/api/budget-items/${item.id}`, { method: "DELETE" });
-                          if (!res.ok) throw new Error("Failed");
-                        } catch {
-                          // revert if it fails
-                          setItems((prev) => [...prev, item].sort((a,b)=>a.name.localeCompare(b.name)));
-                          alert("Delete failed");
-                        }
-                      }}
+                      onClick={() => setToDelete(item)}
+                      type="button"
                     >
                       Delete
                     </button>
@@ -196,6 +204,34 @@ export default function AddBudgetItemPage() {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={!!toDelete}
+        title="Delete budget item?"
+        message={
+          <span>
+            Delete <strong>{toDelete?.name}</strong> ({toDelete?.category.macro} • {toDelete?.category.micro})?
+            <br />This cannot be undone.
+          </span>
+        }
+        confirmText="Delete"
+        cancelText="Cancel"
+        onCancel={() => setToDelete(null)}
+        onConfirm={async () => {
+          if (!toDelete) return;
+          const item = toDelete;
+          setToDelete(null);
+
+          // optimistic remove
+          setItems((prev) => prev.filter((x) => x.id !== item.id));
+          try {
+            const res = await fetch(`/api/budget-items/${item.id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Failed');
+          } catch {
+            setItems((prev) => [...prev, item].sort((a, b) => a.name.localeCompare(b.name)));
+            alert('Delete failed');
+          }
+        }}
+      />
     </div>
   )
 }
