@@ -54,7 +54,7 @@ type BudgetItem = {
 }
 
 export default function DashboardPage() {
-  const month = getCurrentMonth()
+  const _month = getCurrentMonth()
   const [settings, setSettings] = useState<Settings | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [budgetItems, setBudgetItems] = useState<BudgetItem[]>([])

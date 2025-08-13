@@ -9,8 +9,6 @@ import { macroCategories, microCategories, microToMacro } from '@/utils/categori
 import type { MacroCategory, MicroCategory } from '@/utils/categories'
 import ConfirmDialog from '@/components/ConfirmDialog';
 
-const [toDelete, setToDelete] = useState<BudgetItem | null>(null);
-
 type BudgetItem = {
   id: string
   name: string
@@ -31,6 +29,7 @@ type FormValues = {
 
 export default function AddBudgetItemPage() {
   const [items, setItems] = useState<BudgetItem[]>([])
+  const [toDelete, setToDelete] = useState<BudgetItem | null>(null);
 
   const {
     register,
@@ -73,21 +72,6 @@ export default function AddBudgetItemPage() {
       setItems(await refreshed.json())
     } catch (err) {
       console.error('Submit error:', err)
-    }
-  }
-
-  const handleDelete = async (item: BudgetItem) => {
-    const ok = window.confirm(`Delete "${item.name}"? This action cannot be undone.`);
-    if (!ok) return;
-    // optimistic update
-    setItems((prev) => prev.filter((x) => x.id !== item.id));
-    try {
-      const res = await fetch(`/api/budget-items/${item.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed");
-    } catch {
-      // revert if it fails
-      setItems((prev) => [...prev, item].sort((a,b)=>a.name.localeCompare(b.name)));
-      alert("Delete failed");
     }
   }
 

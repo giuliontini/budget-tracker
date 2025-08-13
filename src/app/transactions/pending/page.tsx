@@ -6,8 +6,6 @@ import Navbar from '@/components/Navbar'
 import { microCategories, microToMacro } from '@/utils/categories'
 import ConfirmDialog from '@/components/ConfirmDialog';
 
-const [toDelete, setToDelete] = useState<Tx | null>(null);
-
 type Tx = {
   id: number
   description: string
@@ -20,6 +18,7 @@ export default function PendingTransactionsPage() {
   const [txs, setTxs] = useState<Tx[]>([])
   const [selected, setSelected] = useState<Record<number, string>>({})
   const [addLookup, setAddLookup] = useState<Record<number, boolean>>({})
+  const [toDelete, setToDelete] = useState<Tx | null>(null);
 
   useEffect(() => {
     // fetch all and filter pending client-side
@@ -46,7 +45,7 @@ export default function PendingTransactionsPage() {
 
     setTxs((prev) => prev.filter((t) => t.id !== tx.id))
   }
-  
+
   return (
     <div className="p-6 space-y-8">
       <Navbar title="Pending" />

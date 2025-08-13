@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { lookupCategory } from '@/lib/classifier'
 
-var responseStatus = 201
+let responseStatus = 201
 
 export async function POST(req: NextRequest) {
   const apiKey = req.headers.get('api-key')

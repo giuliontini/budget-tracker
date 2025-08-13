@@ -18,7 +18,7 @@ export default function SettingsPage() {
     register,
     handleSubmit,
     reset,
-    formState: { isSubmitting, isSubmitSuccessful },
+    formState: { isSubmitting },
   } = useForm<SettingsForm>()
 
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle')
