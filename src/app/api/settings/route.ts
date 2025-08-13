@@ -1,35 +1,11 @@
 // src/app/api/settings/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
+import { getUser } from "@/lib/auth";
 import prisma from '@/lib/prisma'
 
-async function requireAuth(req: NextRequest, res: NextResponse) {
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll: () => req.cookies.getAll(),
-        setAll: (cookies) =>
-          cookies.forEach(({ name, value, options }) =>
-            res.cookies.set(name, value, options)
-          ),
-      },
-    }
-  )
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-
-  if (!session) {
-    return new NextResponse('Unauthorized', { status: 401 })
-  }
-  return null
-}
-
-export async function GET(req: NextRequest) {
-  const res = NextResponse.next({ request: req })
-  if (await requireAuth(req, res)) return requireAuth(req, res)
+export async function GET(req: NextRequest): Promise<Response> {
+  const user = await getUser(req);
+  if (!user) return new Response("Unauthorized", { status: 401 });
 
   const url = new URL(req.url)
   const month = url.searchParams.get('month')
@@ -40,9 +16,9 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(result)
 }
 
-export async function POST(req: NextRequest) {
-  const res = NextResponse.next({ request: req })
-  if (await requireAuth(req, res)) return requireAuth(req, res)
+export async function POST(req: NextRequest): Promise<Response> {
+  const user = await getUser(req);
+  if (!user) return new Response("Unauthorized", { status: 401 });
 
   // parse & validate
   const body = await req.json()
