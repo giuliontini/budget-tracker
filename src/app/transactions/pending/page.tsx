@@ -102,6 +102,24 @@ export default function PendingTransactionsPage() {
             </label>
 
             <button
+              className="text-red-600 hover:underline text-sm"
+              onClick={async () => {
+                // optimistic remove
+                setTxs((prev) => prev.filter((t) => t.id !== tx.id));
+                try {
+                  const res = await fetch(`/api/transactions/${tx.id}`, { method: "DELETE" });
+                  if (!res.ok) throw new Error("Failed");
+                } catch {
+                  // if it fails, bring it back
+                  setTxs((prev) => [tx, ...prev]);
+                  alert("Delete failed");
+                }
+              }}
+            >
+              Delete
+            </button>
+
+            <button
               className="sm:ml-auto bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50 w-full sm:w-auto"
               disabled={!selected[tx.id]}
               onClick={() => handleSave(tx)}>

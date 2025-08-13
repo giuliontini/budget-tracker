@@ -5,11 +5,12 @@ import prisma from '@/lib/prisma'
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  ctx: { params: Promise<{ id: string }> }   // 👈 Promise
 ): Promise<Response> {
   const user = await getUser(req);
   if (!user) return new Response("Unauthorized", { status: 401 });
 
+  const { id } = await ctx.params;
   const { category, addToLookup } = await req.json()
   if (!category) {
     return NextResponse.json(
@@ -19,7 +20,7 @@ export async function PATCH(
   }
 
   const updatedTx = await prisma.transaction.update({
-    where: { id: params.id },
+    where: { id },
     data: { category, status: 'confirmed' },
   })
 
@@ -33,4 +34,18 @@ export async function PATCH(
   }
 
   return NextResponse.json(updatedTx)
+}
+
+export async function DELETE(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+): Promise<Response> {
+  const user = await getUser(req);
+  if (!user) return new Response("Unauthorized", { status: 401 });
+
+  const { id } = await ctx.params; 
+  if (!id) return new Response("Missing id", { status: 400 });
+
+  await prisma.transaction.delete({ where: { id } });
+  return new Response(null, { status: 204 });
 }

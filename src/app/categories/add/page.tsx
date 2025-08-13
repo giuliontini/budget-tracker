@@ -169,6 +169,27 @@ export default function AddBudgetItemPage() {
                     </div>
                     <div className="text-black font-bold">${item.amount.toFixed(2)}</div>
                   </div>
+
+                  {/* Delete sits UNDER the amount */}
+                  <div className="mt-2">
+                    <button
+                      className="text-red-600 hover:underline text-sm"
+                      onClick={async () => {
+                        // optimistic update
+                        setItems((prev) => prev.filter((x) => x.id !== item.id));
+                        try {
+                          const res = await fetch(`/api/budget-items/${item.id}`, { method: "DELETE" });
+                          if (!res.ok) throw new Error("Failed");
+                        } catch {
+                          // revert if it fails
+                          setItems((prev) => [...prev, item].sort((a,b)=>a.name.localeCompare(b.name)));
+                          alert("Delete failed");
+                        }
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>

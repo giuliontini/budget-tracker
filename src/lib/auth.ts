@@ -21,9 +21,7 @@ export async function getUser(req: NextRequest): Promise<User | null> {
     }
   );
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  return session?.user ?? null;
+  const { data, error } = await supabase.auth.getUser();
+  if (error) return null;
+  return data.user ?? null;
 }
