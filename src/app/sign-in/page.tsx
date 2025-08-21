@@ -25,16 +25,13 @@ export default function SignIn() {
          supabaseClient={supabaseBrowser}
          theme="dark"
          appearance={{
-           theme: ThemeSupa,
-           className: {
-             input:
-               'bg-black text-white placeholder-gray-300 border border-gray-700 focus:border-white focus:ring-0',
-             label: 'text-white',
-             // make the error/info message readable on black
-             message:
-               'bg-black text-white border border-gray-700 rounded-md px-3 py-2',
-           },
-         }}
+          theme: ThemeSupa,
+          style: {
+            input: { background: '#000', color: '#fff' },
+            label: { color: '#fff' },
+            message: { color: '#fff' },
+          },
+        }}
          providers={['github', 'google']}
          view="sign_in"
       />

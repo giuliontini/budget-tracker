@@ -1,7 +1,7 @@
 // src/app/dashboard/page.tsx
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { Doughnut, Line, Bar } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -53,6 +53,72 @@ type BudgetItem = {
   }
 }
 
+// --- Chip filter persistence (replace your current hook with this)
+const MICRO_FILTERS_KEY = "budgetTracker:microEnabled"
+type MicroEnabled = Record<string, boolean>
+
+function useMicroFilters(
+  microCats: readonly string[],
+  defaultOff: readonly string[] = []
+) {
+  // Compute initial state ONCE (no setState in effects)
+  const [enabled, setEnabled] = useState<MicroEnabled>(() => {
+    // base: all ON except defaultOff
+    const base: MicroEnabled = {}
+    for (const m of microCats) base[m] = !defaultOff.includes(m)
+
+    if (typeof window === "undefined") return base
+
+    const saved = localStorage.getItem(MICRO_FILTERS_KEY)
+    if (!saved) return base
+
+    try {
+      const parsed = JSON.parse(saved) as MicroEnabled
+      // merge saved on top of base
+      for (const m of microCats) {
+        base[m] = parsed[m] ?? base[m]
+      }
+    } catch {
+      // ignore corrupted storage
+    }
+    return base
+  })
+
+  // Persist when enabled changes
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(MICRO_FILTERS_KEY, JSON.stringify(enabled))
+    }
+  }, [enabled])
+
+  // If the list of categories changes, reconcile once (no infinite loops)
+  useEffect(() => {
+    setEnabled(prev => {
+      // build next mapping with previous values when available
+      const next: MicroEnabled = {}
+      for (const m of microCats) {
+        next[m] = prev[m] ?? !defaultOff.includes(m)
+      }
+      // avoid unnecessary state updates
+      const sameKeys =
+        Object.keys(prev).length === Object.keys(next).length &&
+        Object.keys(next).every(k => prev[k] === next[k])
+      return sameKeys ? prev : next
+    })
+  }, [microCats, defaultOff])
+
+  const toggle = (m: string) => setEnabled(prev => ({ ...prev, [m]: !prev[m] }))
+  const setAll = (value: boolean) =>
+    setEnabled(Object.fromEntries(microCats.map(m => [m, value])) as MicroEnabled)
+
+  const active = useMemo(
+    () => microCats.filter(m => enabled[m]),
+    [microCats, enabled]
+  )
+
+  return { enabled, toggle, setAll, active }
+}
+
 export default function DashboardPage() {
   const _month = getCurrentMonth()
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -61,6 +127,10 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [monthOffset, setMonthOffset] = useState(0)
   const [filter, setFilter] = useState('')
+  const { enabled, toggle, setAll, active } = useMicroFilters(
+    microCategories,
+    ["Housing/Rent"]            // default-off
+  )  
 
   // Compute viewedMonth based on offset
   const now = new Date()
@@ -164,20 +234,22 @@ export default function DashboardPage() {
     ],
   }
 
-  // Bar: spend vs budget per micro
-  const budgetByMicro = microCategories.map((µ) => {
-    const item = budgetItems.find((b) => b.category.micro === µ)
+  // Bar: spend vs budget per micro (with chip filters)
+  const budgetByMicro = active.map((m) => {
+    const item = budgetItems.find((b) => b.category.micro === m)
     return item ? item.amount : 0
   })
-  const spentByMicro = microCategories.map((µ) => microTotals[µ])
+
+  const spentByMicro = active.map((m) => microTotals[m] ?? 0)
+
   const barData = {
-    labels: [...microCategories],
+    labels: active,
     datasets: [
       { label: 'Spent', data: spentByMicro, backgroundColor: 'red' },
       { label: 'Budget', data: budgetByMicro, backgroundColor: 'blue' },
     ],
-
   }
+
 
   // Filtered transactions for table
   const filteredTx = txThisMonth.filter((tx) =>
@@ -247,6 +319,49 @@ export default function DashboardPage() {
 
       <section>
         <h2 className="text-xl font-semibold mb-4">Spending vs. Budget</h2>
+        {/* Chip filter toolbar */}
+        <div className="mb-3 rounded-2xl border p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-sm text-gray-600 dark:text-gray-300">
+              Showing <span className="font-medium text-gray-900 dark:text-gray-100">{active.length}</span> / {microCategories.length}
+            </div>
+            <div className="space-x-2">
+              <button
+                onClick={() => setAll(true)}
+                className="rounded-xl border px-3 py-1.5 text-sm hover:bg-gray-100 dark:hover:bg-zinc-800"
+              >
+                Select all
+              </button>
+              <button
+                onClick={() => setAll(false)}
+                className="rounded-xl border px-3 py-1.5 text-sm hover:bg-gray-100 dark:hover:bg-zinc-800"
+              >
+                Clear all
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+            {microCategories.map((m) => {
+              const on = !!enabled[m]
+              return (
+                <button
+                  key={m}
+                  onClick={() => toggle(m)}
+                  className={[
+                    "rounded-full px-3 py-1.5 text-sm transition-all border",
+                    on
+                      ? "bg-gray-900 text-white border-gray-900 dark:bg-white dark:text-black dark:border-white"
+                      : "bg-white text-gray-900 border-gray-300 hover:border-gray-500 dark:bg-zinc-900 dark:text-gray-100 dark:border-zinc-700 dark:hover:border-zinc-500",
+                  ].join(" ")}
+                  title={on ? "Click to hide" : "Click to show"}
+                >
+                  {m}
+                </button>
+              )
+            })}
+          </div>
+        </div>
         <div className="relative w-full h-[240px] sm:h-[300px] md:h-[360px]">
           <Bar
             data={barData}
