@@ -235,10 +235,9 @@ export default function DashboardPage() {
   }
 
   // Bar: spend vs budget per micro (with chip filters)
-  const budgetByMicro = active.map((m) => {
-    const item = budgetItems.find((b) => b.category.micro === m)
-    return item ? item.amount : 0
-  })
+  const budgetByMicro = active.map((m) =>
+    budgetItems.reduce((sum, b) => (b.category.micro === m ? sum + b.amount : sum), 0)
+  )
 
   const spentByMicro = active.map((m) => microTotals[m] ?? 0)
 
