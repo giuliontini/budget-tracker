@@ -1,0 +1,16 @@
+runtime: nodejs20
+instance_class: F1
+env_variables:
+  NODE_ENV: "production"
+  DATABASE_URL: "postgresql://prisma.ezixvbacsmkrapsluemi:amodenapiovonotigelle@aws-0-us-west-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+  DIRECT_URL: "postgresql://prisma.ezixvbacsmkrapsluemi:amodenapiovonotigelle@aws-0-us-west-1.pooler.supabase.com:5432/postgres"
+  NEXT_PUBLIC_SUPABASE_URL: "https://ezixvbacsmkrapsluemi.supabase.co"
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6aXh2YmFjc21rcmFwc2x1ZW1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMxNDUxODAsImV4cCI6MjA2ODcyMTE4MH0.KvT5QzSDhiSdCDcOpmv30OCP7IHZfF4XVulB7ikp6IE"
+  SUPABASE_SERVICE_ROLE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6aXh2YmFjc21rcmFwc2x1ZW1pIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MzE0NTE4MCwiZXhwIjoyMDY4NzIxMTgwfQ.KACrTr9PeQ5aY-xQb6knA_sQahX8B5YNjF63XV0yX70"
+  INGESTION_API_KEY: "fwYHzgThlT5p3KrmdFLdItkT6HtYIzSTQu5TWTZ1BJ3UQlfqjlI8vyu6inECBobMv9vfooYWiN3Xj0VSZNt7zBXVmnkY7JmipVxqbF2InIGXplErsoyKzHrEidUo8l6t"
+
+automatic_scaling:
+  min_instances: 0
+  max_instances: 1
+  target_cpu_utilization: 0.5
+  max_concurrent_requests: 40

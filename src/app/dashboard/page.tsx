@@ -17,6 +17,7 @@ import {
 import Navbar from '@/components/Navbar'
 import { microCategories } from '@/utils/categories'
 import { getCurrentMonth } from '@/utils/date'
+import { resolvePeriod, withinPeriod, lastNPeriods, type PeriodMode } from '@/utils/periods'
 
 // Register ChartJS components
 ChartJS.register(
@@ -125,51 +126,101 @@ export default function DashboardPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [budgetItems, setBudgetItems] = useState<BudgetItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [monthOffset, setMonthOffset] = useState(0)
+  const [periodMode, setPeriodMode] = useState<PeriodMode>(() => {
+    if (typeof window === 'undefined') return 'calendar'
+    return (localStorage.getItem('budgetTracker:periodMode') as PeriodMode) ?? 'calendar'
+  })
+  const [periodOffset, setPeriodOffset] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0
+    return Number(localStorage.getItem('budgetTracker:periodOffset') ?? 0)
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('budgetTracker:periodMode', periodMode)
+  }, [periodMode])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('budgetTracker:periodOffset', String(periodOffset))
+  }, [periodOffset])
+
+
   const [filter, setFilter] = useState('')
   const { enabled, toggle, setAll, active } = useMicroFilters(
     microCategories,
     ["Housing/Rent"]            // default-off
   )  
 
-  // Compute viewedMonth based on offset
+  // Compute period based on offset
   const now = new Date()
-  const viewedDate = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1)
-  const viewedMonth = `${viewedDate.getFullYear()}-${String(
-    viewedDate.getMonth() + 1
-  ).padStart(2, '0')}`
+  const period = useMemo(
+    () => resolvePeriod(periodMode, periodOffset, now),
+    [periodMode, periodOffset, now]
+  )
 
+  // 1) Load tx + budget ONCE
   useEffect(() => {
-    async function loadData() {
+    let cancelled = false
+    ;(async () => {
       try {
-        const [settingsRes, txRes, budgetRes] = await Promise.all([
-          fetch(`/api/settings?month=${viewedMonth}`),
+        const [txRes, budgetRes] = await Promise.all([
           fetch('/api/transactions'),
           fetch('/api/budget-items'),
         ])
-        const [settingsData, txData, budgetData] = await Promise.all([
-          settingsRes.json(),
-          txRes.json(),
-          budgetRes.json(),
-        ])
-        setSettings(settingsData)
-        setTransactions(txData)
-        setBudgetItems(budgetData)
+        const [txData, budgetData] = await Promise.all([txRes.json(), budgetRes.json()])
+        if (!cancelled) {
+          setTransactions(txData)
+          setBudgetItems(budgetData)
+        }
       } catch (err) {
-        console.error('Error loading dashboard data:', err)
-      } finally {
-        setLoading(false)
+        console.error('Error loading transactions/budget items:', err)
       }
-    }
-    loadData()
-  }, [viewedMonth])
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // 2) Load settings PER PERIOD with fallback
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    ;(async () => {
+      try {
+        // Try exact month first
+        let settingsData: any = null
+        const res = await fetch(`/api/settings?month=${period.settingsKey}`)
+        if (res.ok) {
+          const j = await res.json()
+          if (j) settingsData = j
+        }
+
+        // Fallback: latest settings
+        if (!settingsData) {
+          const resAll = await fetch('/api/settings')
+          if (resAll.ok) {
+            const list = await resAll.json()
+            // If your API isn’t sorted, sort here by month desc
+            // list.sort((a,b) => b.month.localeCompare(a.month))
+            settingsData = Array.isArray(list) ? list[0] : null
+          }
+        }
+
+        if (!cancelled) setSettings(settingsData)
+      } catch (err) {
+        console.error('Error loading settings:', err)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [period.settingsKey])
+
 
   if (loading) {
     return <p className="p-6">Loading dashboard...</p>
   }
 
   if (!settings) {
-    return <p className="p-6">No settings found for {viewedMonth}</p>
+    return <p className="p-6">No settings found for {period.settingsKey}</p>
   }
 
   // Summary calculations
@@ -178,21 +229,15 @@ export default function DashboardPage() {
   const deductions = gross * 0.51 + 99.38
   const monthlyBudget = gross - deductions
 
-  // Filter transactions for viewedMonth
-  const txThisMonth = transactions.filter((tx) => {
-    const d = new Date(tx.date)
-    return (
-      d.getFullYear() === viewedDate.getFullYear() &&
-      d.getMonth() === viewedDate.getMonth()
-    )
-  })
+  // Filter transactions for period.settingsKey
+  const txInPeriod = transactions.filter((tx) => withinPeriod(tx.date, period))
 
-  const totalSpent = txThisMonth.reduce((sum, tx) => sum + tx.amount, 0)
+  const totalSpent = txInPeriod.reduce((sum, tx) => sum + tx.amount, 0)
   const remaining = monthlyBudget - totalSpent
 
   // Donut: expense distribution per micro
   const microTotals = microCategories.reduce((acc, µ) => {
-    acc[µ] = txThisMonth
+    acc[µ] = txInPeriod
       .filter((tx) => tx.category === µ)
       .reduce((s, t) => s + t.amount, 0)
     return acc
@@ -215,23 +260,20 @@ export default function DashboardPage() {
   }
 
   // Line: spending trends last 6 months
-  const lastSix = Array.from({ length: 6 }).map((_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-  }).reverse()
+  const lastSixPeriods = lastNPeriods(periodMode, periodOffset, 6, now)
+  const lineLabels = lastSixPeriods.map(p => p.settingsKey) // "YYYY-MM" of each period’s end month
+
   const lineData = {
-    labels: lastSix,
-    datasets: [
-      {
-        label: 'Total Spend',
-        data: lastSix.map((m) =>
-          transactions
-            .filter((tx) => tx.date.slice(0, 7) === m)
-            .reduce((s, t) => s + t.amount, 0)
-        ),
-        borderColor: '#d5fd67',
-      },
-    ],
+    labels: lineLabels,
+    datasets: [{
+      label: 'Total Spend',
+      data: lastSixPeriods.map(p =>
+        transactions
+          .filter(tx => withinPeriod(tx.date, p))
+          .reduce((sum, t) => sum + t.amount, 0)
+      ),
+      borderColor: '#d5fd67',
+    }]
   }
 
   // Bar: spend vs budget per micro (with chip filters)
@@ -251,7 +293,7 @@ export default function DashboardPage() {
 
 
   // Filtered transactions for table
-  const filteredTx = txThisMonth.filter((tx) =>
+  const filteredTx = txInPeriod.filter((tx) =>
     tx.description.toLowerCase().includes(filter.toLowerCase())
   )
 
@@ -259,18 +301,25 @@ export default function DashboardPage() {
     <div className="px-4 sm:px-6 lg:px-8 py-6 space-y-8 mx-auto w-full max-w-screen-xl">
       <Navbar title="Dashboard" />
 
-      {/* Month Navigation */}
-      <div className="flex justify-center items-center gap-4">
-        <button onClick={() => setMonthOffset((o) => o - 1)} className="px-2 py-1 border rounded">
-          ← Prev
-        </button>
-        <p className="font-semibold">
-          {viewedDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
-        </p>
-        <button onClick={() => setMonthOffset((o) => o + 1)} className="px-2 py-1 border rounded">
-          Next →
-        </button>
+      {/* Period Controls */}
+    <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+      <div className="flex items-center gap-2">
+        <button onClick={() => setPeriodOffset(o => o - 1)} className="px-2 py-1 border rounded">← Prev</button>
+        <p className="font-semibold">{period.label}</p>
+        <button onClick={() => setPeriodOffset(o => o + 1)} className="px-2 py-1 border rounded">Next →</button>
       </div>
+
+      <select
+        value={periodMode}
+        onChange={(e) => { setPeriodOffset(0); setPeriodMode(e.target.value as PeriodMode) }}
+        className="border rounded px-2 py-1 text-sm"
+      >
+        <option value="calendar">Calendar month</option>
+        <option value="amex">Amex cycle (16–15)</option>
+        {/* <option value="bofa">BofA cycle (27–26)</option> */}
+      </select>
+    </div>
+
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
