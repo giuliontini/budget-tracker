@@ -58,7 +58,6 @@ export function resolvePeriod(mode: PeriodMode, offset: number, today = new Date
   const start = addMonths(currentStart, offset);
   const endExclusive = addMonths(start, 1); // same day next month
   const label = formatRangeLabel(start, endExclusive);
-  const endInclusive = new Date(endExclusive.getTime() - 24 * 60 * 60 * 1000);
   return {
     mode,
     start,

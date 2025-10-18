@@ -9,6 +9,7 @@ export async function middleware(req: NextRequest) {
   if (
     pathname.startsWith('/sign-in') ||
     pathname.startsWith('/api/transactions/ingest') ||
+    pathname.startsWith('/api/gmail-push') ||
     pathname.startsWith('/_next/') ||
     pathname === '/favicon.ico'
   ) {

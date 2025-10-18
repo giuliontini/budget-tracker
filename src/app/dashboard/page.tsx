@@ -121,7 +121,6 @@ function useMicroFilters(
 }
 
 export default function DashboardPage() {
-  const _month = getCurrentMonth()
   const [settings, setSettings] = useState<Settings | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [budgetItems, setBudgetItems] = useState<BudgetItem[]>([])
@@ -153,10 +152,8 @@ export default function DashboardPage() {
 
   // Compute period based on offset
   const now = new Date()
-  const period = useMemo(
-    () => resolvePeriod(periodMode, periodOffset, now),
-    [periodMode, periodOffset, now]
-  )
+  const period = useMemo(() => resolvePeriod(periodMode, periodOffset), [periodMode, periodOffset])
+
 
   // 1) Load tx + budget ONCE
   useEffect(() => {
@@ -186,10 +183,10 @@ export default function DashboardPage() {
     ;(async () => {
       try {
         // Try exact month first
-        let settingsData: any = null
+        let settingsData: Settings | null = null
         const res = await fetch(`/api/settings?month=${period.settingsKey}`)
         if (res.ok) {
-          const j = await res.json()
+          const j = (await res.json()) as Settings | null
           if (j) settingsData = j
         }
 
@@ -197,7 +194,7 @@ export default function DashboardPage() {
         if (!settingsData) {
           const resAll = await fetch('/api/settings')
           if (resAll.ok) {
-            const list = await resAll.json()
+            const list = (await resAll.json()) as Settings[]
             // If your API isn’t sorted, sort here by month desc
             // list.sort((a,b) => b.month.localeCompare(a.month))
             settingsData = Array.isArray(list) ? list[0] : null

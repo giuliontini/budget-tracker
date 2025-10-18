@@ -56,3 +56,18 @@ model BudgetItem {
 
   @@unique([name, categoryId])
 }
+
+model GmailState {
+  emailAddress String @id             // e.g. "giuliontini@gmail.com"
+  historyId    String                 // last processed historyId
+  updatedAt    DateTime @updatedAt
+}
+
+// Optional if you later support multiple inboxes:
+model GmailCredential {
+  emailAddress String  @id
+  accessToken  String
+  refreshToken String
+  expiryDate   BigInt?                // ms since epoch
+  updatedAt    DateTime @updatedAt
+}
