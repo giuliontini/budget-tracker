@@ -1,4 +1,4 @@
-// /src/lib/parseAmex.ts
+// src/lib/parseAmex.ts
 import * as cheerio from "cheerio";
 
 const AMEX_FROM = "AmericanExpress@welcome.americanexpress.com";
@@ -8,111 +8,253 @@ export type ParsedTx = {
   merchant?: string;
   amount?: number;
   date?: Date;
-  reason?: string; // debugging
+  reason?: string;
+  confidence?: 'high' | 'medium' | 'low';
 };
 
 function cleanText(s: string) {
   return s.replace(/\s+/g, " ").trim();
 }
 
-// Heuristic: merchant is typically UPPERCASE words (letters, spaces & ampersand)
-function findMerchant($: cheerio.CheerioAPI): string | undefined {
-  // scan headings and strongish elements first
-  const candidates: string[] = [];
-  $("h1,h2,h3,strong,b,td,div,p,span").each((_, el) => {
-    const t = cleanText($(el).text() || "");
-    if (!t) return;
+// AMEX-specific: merchant appears in blue (#006fcf) text
+function findMerchantAmexStyle($: cheerio.CheerioAPI): { merchant?: string; confidence: 'high' | 'medium' | 'low' } {
+  let bestCandidate: { text: string; score: number } | null = null;
 
-    // all-caps-ish and not the boilerplate sentence
-    const isCapsy = /^[A-Z0-9&\-\.\s]{3,}$/.test(t) && /[A-Z]/.test(t);
-    const notDollar = !/\$\s*\d/.test(t);
-    const notBoiler = !/there was a large purchase on your card/i.test(t);
-    if (isCapsy && notDollar && notBoiler) candidates.push(t);
+  // Strategy 1: Look for blue-colored (#006fcf) text that's all caps
+  // This is the most reliable indicator based on the real email
+  $("*").each((_, el) => {
+    const $el = $(el);
+    const text = cleanText($el.text());
+    
+    // Check if element has the AMEX blue color
+    const style = $el.attr("style") || "";
+    const hasBlueColor = /color:\s*#006fcf/i.test(style);
+    
+    // Also check direct color attribute
+    const colorAttr = $el.css("color");
+    const isBlueColor = hasBlueColor || colorAttr === "#006fcf";
+    
+    if (isBlueColor && text.length > 3) {
+      // Check if it's mostly uppercase (merchant names are usually all caps)
+      const uppercaseRatio = (text.match(/[A-Z]/g) || []).length / text.replace(/[^a-zA-Z]/g, '').length;
+      
+      if (uppercaseRatio > 0.5) {
+        // Exclude known boilerplate phrases
+        if (!/change the dollar amount|track this spending|contact us|update your/i.test(text)) {
+          const score = 15; // High confidence for blue + uppercase
+          if (!bestCandidate || score > bestCandidate.score) {
+            bestCandidate = { text, score };
+          }
+        }
+      }
+    }
   });
 
-  // pick the longest “capsy” chunk (usually the merchant)
-  candidates.sort((a, b) => b.length - a.length);
-  return candidates[0];
-}
-
-function findAmountsFromText(text: string): number[] {
-  const amounts: number[] = [];
-  const re = /\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|[0-9]+\.[0-9]{2})/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const n = Number(m[1].replace(/,/g, ""));
-    amounts.push(n);
+  // Strategy 2: Look in <p> tags with bold font for all-caps text near dollar signs
+  if (!bestCandidate) {
+    $("p").each((_, el) => {
+      const $el = $(el);
+      const text = cleanText($el.text());
+      
+      // Check if it's bold
+      const isBold = $el.css("font-weight") === "bold" || 
+                     $el.find("strong, b").length > 0 ||
+                     /font-weight:\s*bold/i.test($el.attr("style") || "");
+      
+      if (isBold && /^[A-Z0-9\s&\-\.]{3,}$/.test(text)) {
+        // Check if there's a dollar amount nearby
+        const parent = $el.parent();
+        const parentText = cleanText(parent.text());
+        const hasDollarNearby = /\$\d+/.test(parentText);
+        
+        if (hasDollarNearby) {
+          const score = 10;
+          if (!bestCandidate || score > bestCandidate.score) {
+            bestCandidate = { text, score };
+          }
+        }
+      }
+    });
   }
-  return amounts;
+
+  // Strategy 3: Fallback - look for all-caps text in table cells
+  if (!bestCandidate) {
+    $("td").each((_, el) => {
+      const text = cleanText($(el).text());
+      
+      if (/^[A-Z0-9\s&\-\.]{5,50}$/.test(text)) {
+        const notBoilerplate = !/there was a large purchase|your card|account ending|dear |american express/i.test(text);
+        const noDollar = !/\$\d+/.test(text);
+        
+        if (notBoilerplate && noDollar) {
+          const score = 5;
+          if (!bestCandidate || score > bestCandidate.score) {
+            bestCandidate = { text, score };
+          }
+        }
+      }
+    });
+  }
+
+  if (!bestCandidate) {
+    return { confidence: 'low' as const };
+  }
+
+  // Explicitly type bestCandidate to help TypeScript
+  const candidate: { text: string; score: number } = bestCandidate;
+  
+  const confidence = candidate.score >= 15 ? ('high' as const) : 
+                     candidate.score >= 10 ? ('medium' as const) : ('low' as const);
+  
+  return { merchant: candidate.text, confidence };
 }
 
-function findDate(text: string): Date | undefined {
-  // Formats like: "Fri, Aug 29, 2025" or "Aug 29, 2025"
-  const m1 = text.match(
-    /(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+([A-Za-z]{3,9})\s+(\d{1,2}),\s+(\d{4})/
-  );
-  if (m1) return new Date(`${m1[1]} ${m1[2]}, ${m1[3]}`);
-
-  const m2 = text.match(/([A-Za-z]{3,9})\s+(\d{1,2}),\s+(\d{4})/);
-  if (m2) return new Date(`${m2[1]} ${m2[2]}, ${m2[3]}`);
-
-  return undefined;
-}
-
-export function parseAmexLargePurchase(html: string, fallbacks: {
-  // you can pass the RFC2822 Date header from Gmail if needed
-  rfc2822Date?: string;
-} = {}): ParsedTx {
-  const $ = cheerio.load(html);
-  const fullText = cleanText($("body").text());
-
-  const merchant = findMerchant($);
-
-  // Try to find a “section” that contains the merchant and then grab the closest amount on that side
-  let preferredAmount: number | undefined;
-  if (merchant) {
-    // locate the element that exactly matches merchant (or very close)
-    let node = $("*").filter((_, el) => cleanText($(el).text()) === merchant).first();
-    if (!node.length) {
-      // relaxed contains
-      node = $("*").filter((_, el) => cleanText($(el).text()).includes(merchant)).first();
+// Find amounts with their context
+function findAmounts($: cheerio.CheerioAPI): Array<{ amount: number; context: any; isBold: boolean }> {
+  const results: Array<{ amount: number; context: any; isBold: boolean }> = [];
+  
+  $("*").each((_, el) => {
+    const $el = $(el);
+    const text = cleanText($el.text());
+    
+    // Match dollar amounts including asterisk (for pre-auth notes)
+    const match = text.match(/\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)\*?/);
+    
+    if (match) {
+      const amount = Number(match[1].replace(/,/g, ""));
+      
+      // Skip the $1.00 threshold mention
+      if (amount === 1) {
+        const hasThresholdContext = /more than|greater than|threshold/i.test(text);
+        if (hasThresholdContext) return;
+      }
+      
+      // Check if bold
+      const isBold = $el.css("font-weight") === "bold" || 
+                     /font-weight:\s*bold/i.test($el.attr("style") || "") ||
+                     $el.find("strong, b").length > 0 ||
+                     $el.closest("strong, b").length > 0;
+      
+      results.push({ amount, context: el, isBold });
     }
-    if (node.length) {
-      // Search sibling/parent area for the first $ amount
-      const neighborhood = cleanText(
-        node
-          .parent()
-          .text()
-      );
-      const nearAmts = findAmountsFromText(neighborhood);
-      if (nearAmts.length) preferredAmount = Math.max(...nearAmts);
+  });
+  
+  return results;
+}
+
+// Enhanced date detection
+function findDate($: cheerio.CheerioAPI, fallbackRFC2822?: string): Date | undefined {
+  let foundDate: Date | undefined;
+  
+  // Strategy 1: Look for date in the same table cell as the amount
+  // AMEX puts "Sun, Oct 19, 2025" right below the amount
+  $("*").each((_, el) => {
+    const text = cleanText($(el).text());
+    
+    // Format: "Sun, Oct 19, 2025" or "Oct 19, 2025"
+    const match = text.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})/);
+    if (match) {
+      const parsed = new Date(`${match[1]} ${match[2]}, ${match[3]}`);
+      if (!isNaN(parsed.getTime())) {
+        foundDate = parsed;
+        return false; // break the loop
+      }
     }
+  });
+  
+  // Strategy 2: Look for date without day name
+  if (!foundDate) {
+    $("*").each((_, el) => {
+      const text = cleanText($(el).text());
+      const match = text.match(/([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})/);
+      if (match && !/to stop this alert/i.test(text)) {
+        const parsed = new Date(`${match[1]} ${match[2]}, ${match[3]}`);
+        if (!isNaN(parsed.getTime())) {
+          foundDate = parsed;
+          return false;
+        }
+      }
+    });
   }
-
-  // Global amounts in the whole email
-  let allAmts = findAmountsFromText(fullText);
-
-  // Filter out the “more than $1.00” boilerplate
-  if (/more than\s*\$1\.00/i.test(fullText)) {
-    allAmts = allAmts.filter((n) => n !== 1);
+  
+  // Fallback to RFC2822 header
+  if (!foundDate && fallbackRFC2822) {
+    const d = new Date(fallbackRFC2822);
+    if (!isNaN(d.getTime())) foundDate = d;
   }
+  
+  return foundDate;
+}
 
-  // Choose by preference: neighborhood > largest in body
-  const amount = preferredAmount ?? (allAmts.length ? Math.max(...allAmts) : undefined);
-
-  // Date from body, fallback to header
-  let date = findDate(fullText);
-  if (!date && fallbacks.rfc2822Date) {
-    const d = new Date(fallbacks.rfc2822Date);
-    if (!Number.isNaN(d.getTime())) date = d;
+export function parseAmexLargePurchase(
+  html: string,
+  fallbacks: { rfc2822Date?: string } = {}
+): ParsedTx {
+  try {
+    const $ = cheerio.load(html);
+    
+    // Find merchant using AMEX-specific patterns
+    const merchantResult = findMerchantAmexStyle($);
+    const merchant = merchantResult.merchant;
+    let confidence = merchantResult.confidence;
+    
+    // Find amounts
+    const amounts = findAmounts($);
+    
+    // Prefer bold amounts (the actual transaction amount)
+    const boldAmounts = amounts.filter(a => a.isBold);
+    const preferredAmounts = boldAmounts.length > 0 ? boldAmounts : amounts;
+    
+    // Get the largest amount (usually the actual purchase)
+    const amount = preferredAmounts.length > 0 
+      ? Math.max(...preferredAmounts.map(a => a.amount))
+      : undefined;
+    
+    // Find date
+    const date = findDate($, fallbacks.rfc2822Date);
+    
+    // Adjust confidence based on what we found
+    if (amount && merchant) {
+      // If we found both with high confidence, keep it high
+      if (confidence === 'high') {
+        confidence = 'high';
+      } else {
+        confidence = 'medium';
+      }
+    } else if (!merchant) {
+      confidence = 'low';
+    }
+    
+    // Determine reason
+    let reason = 'ok';
+    if (!amount) {
+      reason = 'no-amount';
+      confidence = 'low';
+    } else if (!merchant) {
+      reason = 'no-merchant';
+      confidence = 'low';
+    } else if (!date) {
+      reason = 'no-date-using-header';
+      // Don't lower confidence for missing date if we have fallback
+      if (!fallbacks.rfc2822Date) {
+        confidence = confidence === 'high' ? 'medium' : 'low';
+      }
+    }
+    
+    return {
+      merchant,
+      amount,
+      date,
+      reason,
+      confidence,
+    };
+  } catch (error) {
+    console.error("Error parsing AMEX email:", error);
+    return {
+      reason: 'parse-error',
+      confidence: 'low',
+    };
   }
-
-  return {
-    merchant,
-    amount,
-    date,
-    reason: !amount ? "no-amount" : !merchant ? "no-merchant" : "ok",
-  };
 }
 
 export const AMEX_FILTERS = { from: AMEX_FROM, subject: AMEX_SUBJECT };
