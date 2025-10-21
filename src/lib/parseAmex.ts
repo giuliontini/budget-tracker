@@ -110,8 +110,8 @@ function findMerchantAmexStyle($: cheerio.CheerioAPI): { merchant?: string; conf
 }
 
 // Find amounts with their context
-function findAmounts($: cheerio.CheerioAPI): Array<{ amount: number; context: any; isBold: boolean }> {
-  const results: Array<{ amount: number; context: any; isBold: boolean }> = [];
+function findAmounts($: cheerio.CheerioAPI): Array<{ amount: number; context: unknown; isBold: boolean }> {
+  const results: Array<{ amount: number; context: unknown; isBold: boolean }> = [];
   
   $("*").each((_, el) => {
     const $el = $(el);

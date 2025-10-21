@@ -16,7 +16,6 @@ import {
 } from 'chart.js'
 import Navbar from '@/components/Navbar'
 import { microCategories } from '@/utils/categories'
-import { getCurrentMonth } from '@/utils/date'
 import { resolvePeriod, withinPeriod, lastNPeriods, type PeriodMode } from '@/utils/periods'
 
 // Register ChartJS components

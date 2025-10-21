@@ -6,7 +6,7 @@ export const maxDuration = 60; // Allow up to 60s for processing
 import { NextRequest, NextResponse } from "next/server";
 import { OAuth2Client } from "google-auth-library";
 import { google, gmail_v1 } from "googleapis";
-import { parseAmexLargePurchase, type ParsedTx } from "@/lib/parseAmex";
+import { parseAmexLargePurchase } from "@/lib/parseAmex";
 import { lookupCategory } from '@/lib/classifier';
 import prisma from "@/lib/prisma";
 
@@ -42,7 +42,7 @@ async function verifyPubSubOidc(req: NextRequest) {
 }
 
 // ------- Gmail client -------
-async function getGmailClientFor(emailAddress: string): Promise<gmail_v1.Gmail> {
+async function getGmailClientFor(): Promise<gmail_v1.Gmail> {
   const access_token = process.env.GMAIL_ACCESS_TOKEN;
   const refresh_token = process.env.GMAIL_REFRESH_TOKEN;
   const expiry_date = process.env.GMAIL_EXPIRY_DATE ? Number(process.env.GMAIL_EXPIRY_DATE) : undefined;
@@ -106,14 +106,14 @@ async function processHistory(emailAddress: string, pushedHistoryId: string) {
   console.log(`[Gmail Push] Processing history for ${emailAddress}, historyId: ${pushedHistoryId}`);
   
   try {
-    const gmail = await getGmailClientFor(emailAddress);
+    const gmail = await getGmailClientFor();
     const start = (await getLastHistoryId(emailAddress)) ?? pushedHistoryId;
 
     let pageToken: string | undefined;
     let newest = start;
     let messagesProcessed = 0;
     let transactionsCreated = 0;
-    let errors: Array<{ messageId: string; error: string }> = [];
+    const errors: Array<{ messageId: string; error: string }> = [];
 
     do {
       try {
