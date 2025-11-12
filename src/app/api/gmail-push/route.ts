@@ -27,6 +27,38 @@ const ALLOWED_ISS = new Set([
 const AMEX_FROM = "AmericanExpress@welcome.americanexpress.com";
 const AMEX_SUBJECT = "Large Purchase Approved";
 
+const PROCESSING_TIME_BUDGET_MS = 55_000; // Keep a buffer below the 60s hard limit
+
+class ProcessingDeadlineError extends Error {
+  constructor() {
+    super("Processing time budget exhausted");
+  }
+}
+
+class GmailHistoryResyncError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+function compareHistoryIds(a?: string | null, b?: string | null): number {
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  const ai = BigInt(a);
+  const bi = BigInt(b);
+  if (ai === bi) return 0;
+  return ai > bi ? 1 : -1;
+}
+
+function isHistoryIdNotFoundError(err: unknown) {
+  if (!err || typeof err !== "object") return false;
+  const anyErr = err as { code?: number; errors?: Array<{ reason?: string }>; message?: string };
+  const message = anyErr.message ?? "";
+  const reason = anyErr.errors?.some(e => e.reason === "historyIdNotFound");
+  return anyErr.code === 404 && (reason || /historyid/i.test(message));
+}
+
 // ------- OIDC verify -------
 async function verifyPubSubOidc(req: NextRequest) {
   const authz = req.headers.get("authorization") || req.headers.get("Authorization");
@@ -74,6 +106,22 @@ async function setLastHistoryId(emailAddress: string, historyId: string) {
   });
 }
 
+async function resetHistoryPointer(gmail: gmail_v1.Gmail, emailAddress: string) {
+  const profile = await gmail.users.getProfile({ userId: "me" });
+  const latestHistoryId = profile.data.historyId;
+
+  if (!latestHistoryId) {
+    throw new GmailHistoryResyncError("Unable to obtain latest Gmail historyId");
+  }
+
+  await setLastHistoryId(emailAddress, latestHistoryId);
+  console.warn(
+    `[Gmail Push] Gmail historyId too old. Resetting pointer to ${latestHistoryId}`
+  );
+
+  return latestHistoryId;
+}
+
 // ------- Duplicate detection helper -------
 async function isTransactionDuplicate(
   date: Date,
@@ -104,161 +152,179 @@ async function isTransactionDuplicate(
 // ------- History processing with enhanced error handling -------
 async function processHistory(emailAddress: string, pushedHistoryId: string) {
   console.log(`[Gmail Push] Processing history for ${emailAddress}, historyId: ${pushedHistoryId}`);
-  
+
   try {
     const gmail = await getGmailClientFor();
-    const start = (await getLastHistoryId(emailAddress)) ?? pushedHistoryId;
+    const saved = await getLastHistoryId(emailAddress);
+    const start = saved && compareHistoryIds(saved, pushedHistoryId) > 0 ? saved : pushedHistoryId;
 
     let pageToken: string | undefined;
     let newest = start;
+    let checkpoint = start;
     let messagesProcessed = 0;
     let transactionsCreated = 0;
     const errors: Array<{ messageId: string; error: string }> = [];
+    const startedAt = Date.now();
 
     do {
+      if (Date.now() - startedAt > PROCESSING_TIME_BUDGET_MS) {
+        throw new ProcessingDeadlineError();
+      }
+
+      let res;
       try {
-        const res = await gmail.users.history.list({
+        res = await gmail.users.history.list({
           userId: "me",
           startHistoryId: start,
           historyTypes: ["messageAdded"],
           pageToken,
-          maxResults: 100, // Reduced from 500 for more reliable processing
+          maxResults: 100,
         });
-        
-        pageToken = res.data.nextPageToken ?? undefined;
+      } catch (pageError) {
+        if (isHistoryIdNotFoundError(pageError)) {
+          await resetHistoryPointer(gmail, emailAddress);
+          throw new GmailHistoryResyncError("historyIdNotFound");
+        }
+        console.error(`[Gmail Push] Error processing history page:`, pageError);
+        throw pageError;
+      }
 
-        for (const h of res.data.history ?? []) {
-          if (h.id && BigInt(h.id) > BigInt(newest)) newest = h.id;
+      pageToken = res.data.nextPageToken ?? undefined;
 
-          for (const ma of h.messagesAdded ?? []) {
-            const id = ma.message?.id;
-            if (!id) continue;
+      for (const h of res.data.history ?? []) {
+        if (Date.now() - startedAt > PROCESSING_TIME_BUDGET_MS) {
+          throw new ProcessingDeadlineError();
+        }
+        if (h.id && BigInt(h.id) > BigInt(newest)) newest = h.id;
 
-            try {
-              messagesProcessed++;
-              
-              // Fetch full message
-              const m = await gmail.users.messages.get({ 
-                userId: "me", 
-                id, 
-                format: "full" 
-              });
+        for (const ma of h.messagesAdded ?? []) {
+          if (Date.now() - startedAt > PROCESSING_TIME_BUDGET_MS) {
+            throw new ProcessingDeadlineError();
+          }
+          const id = ma.message?.id;
+          if (!id) continue;
 
-              const headers = m.data.payload?.headers ?? [];
-              const from = headers.find(hh => hh.name?.toLowerCase() === "from")?.value || "";
-              const subject = headers.find(hh => hh.name?.toLowerCase() === "subject")?.value || "";
+          try {
+            messagesProcessed++;
 
-              // Check if this is an AMEX large purchase email
-              const isAmex =
-                from.includes(AMEX_FROM) && subject.trim() === AMEX_SUBJECT;
+            // Fetch full message
+            const m = await gmail.users.messages.get({
+              userId: "me",
+              id,
+              format: "full"
+            });
 
-              if (!isAmex) continue;
+            const headers = m.data.payload?.headers ?? [];
+            const from = headers.find(hh => hh.name?.toLowerCase() === "from")?.value || "";
+            const subject = headers.find(hh => hh.name?.toLowerCase() === "subject")?.value || "";
 
-              console.log(`[Gmail Push] Processing AMEX email: ${id}`);
+            // Check if this is an AMEX large purchase email
+            const isAmex =
+              from.includes(AMEX_FROM) && subject.trim() === AMEX_SUBJECT;
 
-              // Collect HTML
-              let html = "";
-              const walk = (p?: gmail_v1.Schema$MessagePart) => {
-                if (!p) return;
-                if (p.mimeType === "text/html" && p.body?.data) {
-                  html += Buffer.from(p.body.data, "base64").toString("utf-8");
-                }
-                p.parts?.forEach(walk);
-              };
-              walk(m.data.payload);
-              
-              if (!html && m.data.payload?.body?.data) {
-                html = Buffer.from(m.data.payload.body.data, "base64").toString("utf-8");
+            if (!isAmex) continue;
+
+            console.log(`[Gmail Push] Processing AMEX email: ${id}`);
+
+            // Collect HTML
+            let html = "";
+            const walk = (p?: gmail_v1.Schema$MessagePart) => {
+              if (!p) return;
+              if (p.mimeType === "text/html" && p.body?.data) {
+                html += Buffer.from(p.body.data, "base64").toString("utf-8");
               }
+              p.parts?.forEach(walk);
+            };
+            walk(m.data.payload);
 
-              if (!html) {
-                console.warn(`[Gmail Push] No HTML content in message ${id}`);
-                errors.push({ messageId: id, error: "no-html-content" });
-                continue;
-              }
-
-              // Parse with fallback date
-              const dateHeader = headers.find(hh => hh.name?.toLowerCase() === "date")?.value ?? undefined;
-              const parsed = parseAmexLargePurchase(html, { rfc2822Date: dateHeader });
-
-              // Enhanced validation
-              if (!parsed.amount || !parsed.merchant || !parsed.date) {
-                console.warn(`[Gmail Push] AMEX parse incomplete for ${id}:`, {
-                  merchant: parsed.merchant,
-                  amount: parsed.amount,
-                  date: parsed.date,
-                  confidence: parsed.confidence,
-                  reason: parsed.reason,
-                });
-                errors.push({ 
-                  messageId: id, 
-                  error: `parse-incomplete: ${parsed.reason}` 
-                });
-                continue;
-              }
-
-              // Low confidence warning
-              if (parsed.confidence === 'low') {
-                console.warn(`[Gmail Push] Low confidence parse for ${id}:`, parsed);
-              }
-
-              // Check for duplicates BEFORE inserting
-              const isDuplicate = await isTransactionDuplicate(
-                parsed.date,
-                parsed.merchant,
-                parsed.amount
-              );
-
-              if (isDuplicate) {
-                console.log(`[Gmail Push] Skipping duplicate transaction: ${parsed.merchant} $${parsed.amount}`);
-                continue;
-              }
-
-              // Classify and create transaction
-              const category = await lookupCategory(parsed.merchant);
-              const status = category ? 'confirmed' : 'pending';
-
-              await prisma.transaction.create({
-                data: {
-                  date: parsed.date,
-                  description: parsed.merchant,
-                  amount: parsed.amount,
-                  category,
-                  status,
-                },
-              });
-
-              transactionsCreated++;
-              console.log(`[Gmail Push] Created transaction: ${parsed.merchant} $${parsed.amount}`);
-
-            } catch (msgError) {
-              const errMsg = msgError instanceof Error ? msgError.message : String(msgError);
-              console.error(`[Gmail Push] Error processing message ${id}:`, errMsg);
-              errors.push({ messageId: id, error: errMsg });
+            if (!html && m.data.payload?.body?.data) {
+              html = Buffer.from(m.data.payload.body.data, "base64").toString("utf-8");
             }
+
+            if (!html) {
+              console.warn(`[Gmail Push] No HTML content in message ${id}`);
+              errors.push({ messageId: id, error: "no-html-content" });
+              continue;
+            }
+
+            // Parse with fallback date
+            const dateHeader = headers.find(hh => hh.name?.toLowerCase() === "date")?.value ?? undefined;
+            const parsed = parseAmexLargePurchase(html, { rfc2822Date: dateHeader });
+
+            // Enhanced validation
+            if (!parsed.amount || !parsed.merchant || !parsed.date) {
+              console.warn(`[Gmail Push] AMEX parse incomplete for ${id}:`, {
+                merchant: parsed.merchant,
+                amount: parsed.amount,
+                date: parsed.date,
+                confidence: parsed.confidence,
+                reason: parsed.reason,
+              });
+              errors.push({
+                messageId: id,
+                error: `parse-incomplete: ${parsed.reason}`
+              });
+              continue;
+            }
+
+            // Low confidence warning
+            if (parsed.confidence === 'low') {
+              console.warn(`[Gmail Push] Low confidence parse for ${id}:`, parsed);
+            }
+
+            // Check for duplicates BEFORE inserting
+            const isDuplicate = await isTransactionDuplicate(
+              parsed.date,
+              parsed.merchant,
+              parsed.amount
+            );
+
+            if (isDuplicate) {
+              console.log(`[Gmail Push] Skipping duplicate transaction: ${parsed.merchant} $${parsed.amount}`);
+              continue;
+            }
+
+            // Classify and create transaction
+            const category = await lookupCategory(parsed.merchant);
+            const status = category ? 'confirmed' : 'pending';
+
+            await prisma.transaction.create({
+              data: {
+                date: parsed.date,
+                description: parsed.merchant,
+                amount: parsed.amount,
+                category,
+                status,
+              },
+            });
+
+            transactionsCreated++;
+            console.log(`[Gmail Push] Created transaction: ${parsed.merchant} $${parsed.amount}`);
+
+          } catch (msgError) {
+            const errMsg = msgError instanceof Error ? msgError.message : String(msgError);
+            console.error(`[Gmail Push] Error processing message ${id}:`, errMsg);
+            errors.push({ messageId: id, error: errMsg });
           }
         }
-      } catch (pageError) {
-        console.error(`[Gmail Push] Error processing history page:`, pageError);
-        throw pageError; // Re-throw to be caught by outer try-catch
+      }
+
+      if (newest && compareHistoryIds(newest, checkpoint) > 0) {
+        checkpoint = newest;
+        await setLastHistoryId(emailAddress, checkpoint);
+        console.log(`[Gmail Push] Advanced checkpoint to ${checkpoint}`);
       }
     } while (pageToken);
 
-    // Update history ID only if we successfully processed everything
-    if (newest !== start) {
-      await setLastHistoryId(emailAddress, newest);
-      console.log(`[Gmail Push] Updated historyId to ${newest}`);
-    }
-
     console.log(`[Gmail Push] Complete: ${messagesProcessed} messages, ${transactionsCreated} transactions, ${errors.length} errors`);
-    
+
     if (errors.length > 0) {
       console.log(`[Gmail Push] Errors:`, errors);
     }
 
   } catch (error) {
     console.error(`[Gmail Push] Fatal error processing history:`, error);
-    throw error; // Will be caught by the POST handler
+    throw error;
   }
 }
 
@@ -299,25 +365,32 @@ export async function POST(req: NextRequest) {
     // This ensures we don't ACK until processing is complete
     try {
       await processHistory(emailAddress, historyId);
-      
+
       const duration = Date.now() - startTime;
       console.log(`[Gmail Push] Processing completed in ${duration}ms`);
-      
-      return NextResponse.json({ 
-        ok: true, 
+
+      return NextResponse.json({
+        ok: true,
         processed: true,
-        duration 
+        duration
       });
     } catch (processError) {
+      if (processError instanceof GmailHistoryResyncError) {
+        console.warn(`[Gmail Push] Gmail requested resync, acknowledging push.`);
+        return NextResponse.json({ ok: true, resynced: true });
+      }
+
       const errMsg = processError instanceof Error ? processError.message : String(processError);
+      const retryable = processError instanceof ProcessingDeadlineError;
       console.error(`[Gmail Push] Processing failed:`, errMsg);
-      
+
       // Return 500 to trigger Pub/Sub retry with exponential backoff
       return NextResponse.json(
-        { 
-          error: "Processing failed", 
-          message: errMsg 
-        }, 
+        {
+          error: "Processing failed",
+          message: errMsg,
+          retryable,
+        },
         { status: 500 }
       );
     }
