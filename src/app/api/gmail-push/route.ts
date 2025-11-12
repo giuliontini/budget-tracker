@@ -28,6 +28,7 @@ const AMEX_FROM = "AmericanExpress@welcome.americanexpress.com";
 const AMEX_SUBJECT = "Large Purchase Approved";
 
 const PROCESSING_TIME_BUDGET_MS = 55_000; // Keep a buffer below the 60s hard limit
+const MAX_CONCURRENT_FETCHES = 5;
 
 class ProcessingDeadlineError extends Error {
   constructor() {
@@ -57,6 +58,24 @@ function isHistoryIdNotFoundError(err: unknown) {
   const message = anyErr.message ?? "";
   const reason = anyErr.errors?.some(e => e.reason === "historyIdNotFound");
   return anyErr.code === 404 && (reason || /historyid/i.test(message));
+}
+
+function extractHtmlFromPayload(payload?: gmail_v1.Schema$MessagePart): string {
+  let html = "";
+  const walk = (p?: gmail_v1.Schema$MessagePart) => {
+    if (!p) return;
+    if (p.mimeType === "text/html" && p.body?.data) {
+      html += Buffer.from(p.body.data, "base64").toString("utf-8");
+    }
+    p.parts?.forEach(walk);
+  };
+  walk(payload);
+
+  if (!html && payload?.body?.data) {
+    html = Buffer.from(payload.body.data, "base64").toString("utf-8");
+  }
+
+  return html;
 }
 
 // ------- OIDC verify -------
@@ -90,6 +109,44 @@ async function getGmailClientFor(): Promise<gmail_v1.Gmail> {
   );
   oAuth2.setCredentials({ access_token, refresh_token, expiry_date });
   return google.gmail({ version: "v1", auth: oAuth2 });
+}
+
+type MessageMetadata = {
+  from: string;
+  subject: string;
+  dateHeader?: string;
+};
+
+async function fetchMessageMetadata(
+  gmail: gmail_v1.Gmail,
+  id: string
+): Promise<MessageMetadata> {
+  const res = await gmail.users.messages.get({
+    userId: "me",
+    id,
+    format: "metadata",
+    metadataHeaders: ["From", "Subject", "Date"],
+  });
+
+  const headers = res.data.payload?.headers ?? [];
+  const header = (name: string) =>
+    headers.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || "";
+
+  return {
+    from: header("from"),
+    subject: header("subject"),
+    dateHeader: header("date") || undefined,
+  };
+}
+
+async function fetchMessageHtml(gmail: gmail_v1.Gmail, id: string): Promise<string> {
+  const res = await gmail.users.messages.get({
+    userId: "me",
+    id,
+    format: "full",
+  });
+
+  return extractHtmlFromPayload(res.data.payload);
 }
 
 // ------- State helpers -------
@@ -191,6 +248,7 @@ async function processHistory(emailAddress: string, pushedHistoryId: string) {
 
       pageToken = res.data.nextPageToken ?? undefined;
 
+      const messageIds: string[] = [];
       for (const h of res.data.history ?? []) {
         if (Date.now() - startedAt > PROCESSING_TIME_BUDGET_MS) {
           throw new ProcessingDeadlineError();
@@ -198,47 +256,44 @@ async function processHistory(emailAddress: string, pushedHistoryId: string) {
         if (h.id && BigInt(h.id) > BigInt(newest)) newest = h.id;
 
         for (const ma of h.messagesAdded ?? []) {
+          const id = ma.message?.id;
+          if (id) messageIds.push(id);
+        }
+      }
+
+      const uniqueIds = [...new Set(messageIds)];
+
+      let cursor = 0;
+      const processNext = async () => {
+        while (cursor < uniqueIds.length) {
+          const idx = cursor++;
+          const id = uniqueIds[idx];
+          if (!id) continue;
+
           if (Date.now() - startedAt > PROCESSING_TIME_BUDGET_MS) {
             throw new ProcessingDeadlineError();
           }
-          const id = ma.message?.id;
-          if (!id) continue;
 
           try {
             messagesProcessed++;
 
-            // Fetch full message
-            const m = await gmail.users.messages.get({
-              userId: "me",
-              id,
-              format: "full"
-            });
+            const metadata = await fetchMessageMetadata(gmail, id);
 
-            const headers = m.data.payload?.headers ?? [];
-            const from = headers.find(hh => hh.name?.toLowerCase() === "from")?.value || "";
-            const subject = headers.find(hh => hh.name?.toLowerCase() === "subject")?.value || "";
+            if (Date.now() - startedAt > PROCESSING_TIME_BUDGET_MS) {
+              throw new ProcessingDeadlineError();
+            }
 
-            // Check if this is an AMEX large purchase email
             const isAmex =
-              from.includes(AMEX_FROM) && subject.trim() === AMEX_SUBJECT;
+              metadata.from.includes(AMEX_FROM) && metadata.subject.trim() === AMEX_SUBJECT;
 
             if (!isAmex) continue;
 
             console.log(`[Gmail Push] Processing AMEX email: ${id}`);
 
-            // Collect HTML
-            let html = "";
-            const walk = (p?: gmail_v1.Schema$MessagePart) => {
-              if (!p) return;
-              if (p.mimeType === "text/html" && p.body?.data) {
-                html += Buffer.from(p.body.data, "base64").toString("utf-8");
-              }
-              p.parts?.forEach(walk);
-            };
-            walk(m.data.payload);
+            const html = await fetchMessageHtml(gmail, id);
 
-            if (!html && m.data.payload?.body?.data) {
-              html = Buffer.from(m.data.payload.body.data, "base64").toString("utf-8");
+            if (Date.now() - startedAt > PROCESSING_TIME_BUDGET_MS) {
+              throw new ProcessingDeadlineError();
             }
 
             if (!html) {
@@ -247,11 +302,8 @@ async function processHistory(emailAddress: string, pushedHistoryId: string) {
               continue;
             }
 
-            // Parse with fallback date
-            const dateHeader = headers.find(hh => hh.name?.toLowerCase() === "date")?.value ?? undefined;
-            const parsed = parseAmexLargePurchase(html, { rfc2822Date: dateHeader });
+            const parsed = parseAmexLargePurchase(html, { rfc2822Date: metadata.dateHeader });
 
-            // Enhanced validation
             if (!parsed.amount || !parsed.merchant || !parsed.date) {
               console.warn(`[Gmail Push] AMEX parse incomplete for ${id}:`, {
                 merchant: parsed.merchant,
@@ -262,17 +314,15 @@ async function processHistory(emailAddress: string, pushedHistoryId: string) {
               });
               errors.push({
                 messageId: id,
-                error: `parse-incomplete: ${parsed.reason}`
+                error: `parse-incomplete: ${parsed.reason}`,
               });
               continue;
             }
 
-            // Low confidence warning
-            if (parsed.confidence === 'low') {
+            if (parsed.confidence === "low") {
               console.warn(`[Gmail Push] Low confidence parse for ${id}:`, parsed);
             }
 
-            // Check for duplicates BEFORE inserting
             const isDuplicate = await isTransactionDuplicate(
               parsed.date,
               parsed.merchant,
@@ -280,13 +330,14 @@ async function processHistory(emailAddress: string, pushedHistoryId: string) {
             );
 
             if (isDuplicate) {
-              console.log(`[Gmail Push] Skipping duplicate transaction: ${parsed.merchant} $${parsed.amount}`);
+              console.log(
+                `[Gmail Push] Skipping duplicate transaction: ${parsed.merchant} $${parsed.amount}`
+              );
               continue;
             }
 
-            // Classify and create transaction
             const category = await lookupCategory(parsed.merchant);
-            const status = category ? 'confirmed' : 'pending';
+            const status = category ? "confirmed" : "pending";
 
             await prisma.transaction.create({
               data: {
@@ -300,14 +351,19 @@ async function processHistory(emailAddress: string, pushedHistoryId: string) {
 
             transactionsCreated++;
             console.log(`[Gmail Push] Created transaction: ${parsed.merchant} $${parsed.amount}`);
-
           } catch (msgError) {
             const errMsg = msgError instanceof Error ? msgError.message : String(msgError);
             console.error(`[Gmail Push] Error processing message ${id}:`, errMsg);
             errors.push({ messageId: id, error: errMsg });
           }
         }
-      }
+      };
+
+      const workers = Array.from(
+        { length: Math.min(MAX_CONCURRENT_FETCHES, uniqueIds.length) },
+        () => processNext()
+      );
+      await Promise.all(workers);
 
       if (newest && compareHistoryIds(newest, checkpoint) > 0) {
         checkpoint = newest;
